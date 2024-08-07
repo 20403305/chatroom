@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Room</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
+    <style>
+        #chat {
+            width: 50%;
+            height: 400px;
+            overflow-y: scroll;
+            border: 1px solid black;
+            padding: 10px;
+            float: left;
+        }
+        #message {
+            width: 80%;
+        }
+        #files {
+            width: 50%;
+            height: 200px;
+            overflow-y: scroll;
+            border: 1px solid red;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .button-group {
+            margin-top: 10px;
+        }
+        .sidebar {
+            float: left;
+            margin-left: 20px;
+        }
+        .room-display {
+            margin-bottom: 10px;
+        }
+        .container {
+            display: flex;
+        }
+        .chat-section {
+            flex: 1;
+        }
+        .info-section {
+            flex: 1;
+            margin-left: 20px;
+        }
+        .room-info {
+            width: 100%;
+            height: 100px;
+            overflow-y: auto;
+            border: 1px solid black;
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Chat Room</h1>
+    <div class="container">
+        <div class="chat-section">
+            <div>
+                <label for="username">Username:</label>
+                <input type="text" id="username">
+            </div>
+            <div>
+                <label for="room">Room:</label>
+                <input type="text" id="room">
+            </div>
+            <button onclick="joinRoom()">Join Room</button>
+            <div id="chat"></div>
+            <input type="text" id="message" onkeydown="if (event.keyCode == 13) sendMessage()">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+        <div class="info-section">
+            <div class="room-display">
+                <label for="current-rooms">Current Rooms:</label>
+                <input type="text" id="current-rooms" readonly>
+            </div>
+            <div class="room-display">
+                <label for="current-existed-room">Current Existed Room:</label>
+                <div id="current-existed-room" class="room-info"></div>
+            </div>
+            <div>
+                <input type="file" id="fileInput">
+                <input type="text" id="dirInput" placeholder="Enter directory (optional)">
+                <button onclick="uploadFile()">Upload File</button>
+            </div>
+            <div class="button-group">
+                <button onclick="loadFiles()">Refresh</button>
+                <button onclick="goUp()">Up</button>
+            </div>
+            <div id="files"></div>
+        </div>
+    </div>
+
+    <script>
+        var socket = io();
+        var currentUsername = '';
+        var currentRoom = '';
+        var currentDir = '';
+
+        function joinRoom() {
+            var username = document.getElementById('username').value;
+            var room = document.getElementById('room').value;
+            if (username && room) {
+                currentUsername = username;
+                currentRoom = room;
+                socket.emit('join', {'username': username, 'room': room});
+                loadFiles();
+            }
+        }
+
+        function loadFiles() {
+            var dir = document.getElementById('dirInput').value || currentDir;
+            var url = '/files';
+            if (dir) {
+                url += `?dir=${encodeURIComponent(dir)}`;
+            }
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    var filesDiv = document.getElementById('files');
+                    filesDiv.innerHTML = '<h3>Files:</h3>';
+                    if (data.error) {
+                        filesDiv.innerHTML += `<p>${data.error}</p>`;
+                    } else {
+                        currentDir = data.current_dir;
+                        data.files.forEach(file => {
+                            var fileElement = document.createElement('div');
+                            var filePath = currentDir ? `${currentDir}/${file}` : file;
+                            if (isDirectory(file)) {
+                                fileElement.innerHTML = `<a href="#" onclick="navigateTo('${filePath}')">${file}</a>`;
+                            } else {
+                                fileElement.innerHTML = `<a href="/download/${filePath}" target="_blank">${file}</a>`;
+                            }
+                            filesDiv.appendChild(fileElement);
+                        });
+                    }
+                });
+        }
+
+        function isDirectory(file) {
+            return file.indexOf('.') === -1;
+        }
+
+        function navigateTo(dir) {
+            document.getElementById('dirInput').value = dir;
+            loadFiles();
+        }
+
+        function goUp() {
+            var dirs = currentDir.split('/');
+            if (dirs.length > 1) {
+                dirs.pop();
+                var parentDir = dirs.join('/');
+                document.getElementById('dirInput').value = parentDir;
+                loadFiles();
+            } else {
+                document.getElementById('dirInput').value = '/';
+                loadFiles();
+            }
+        }
+
+        function uploadFile() {
+            var fileInput = document.getElementById('fileInput');
+            var file = fileInput.files[0];
+            var dir = document.getElementById('dirInput').value;
+            if (file) {
+                var formData = new FormData();
+                formData.append('file', file);
+                formData.append('dir', dir);
+
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.success) {
+                        alert('File uploaded successfully');
+                        loadFiles();
+                    } else {
+                        alert('File upload failed: ' + result.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error uploading file:', error);
+                    alert('File upload failed');
+                });
+            }
+        }
+
+        function getCurrentTime() {
+            var now = new Date();
+            return `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
+        }
+
+        function sendMessage() {
+            var message = document.getElementById('message').value;
+            if (message && currentUsername && currentRoom) {
+                var time = getCurrentTime();
+                var formattedMessage = `>>>> 时间：${time} <<<<\n${currentUsername} (${location.hostname}):\n${message}`;
+                socket.emit('message', {'message': formattedMessage, 'username': currentUsername, 'room': currentRoom});
+                document.getElementById('message').value = '';
+            }
+        }
+
+        socket.on('message', function(msg) {
+            var chat = document.getElementById('chat');
+            var messageElement = document.createElement('div');
+            messageElement.innerHTML = msg;
+            chat.appendChild(messageElement);
+            chat.scrollTop = chat.scrollHeight;
+        });
+
+        socket.on('update_rooms', function(rooms_info) {
+            var roomsElement = document.getElementById('current-rooms');
+            roomsElement.value = Object.keys(rooms_info).join(', ');
+
+            var existedRoomsElement = document.getElementById('current-existed-room');
+            existedRoomsElement.innerHTML = '';
+            for (var room in rooms_info) {
+                var roomDetail = `Room: ${room}， 当前人数：${rooms_info[room]}人;<br>`;
+                existedRoomsElement.innerHTML += roomDetail;
+            }
+        });
+
+        socket.on('error', function(data) {
+            alert(data.message);
+        });
+
+        window.addEventListener('beforeunload', function() {
+            if (currentUsername && currentRoom) {
+                socket.emit('leave', {'username': currentUsername, 'room': currentRoom});
+            }
+        });
+    </script>
+</body>
+</html>
